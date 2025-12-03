@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"gasm/debug"
 	"gasm/internal/ast/x86_64"
+	"gasm/internal/builder"
 	"os"
 )
 
@@ -35,7 +36,7 @@ func main() {
 
 	x86_64.PrintAST(ast)
 
-	err = x86_64.AssembleAndBuildElf(out, ast)
+	err = builder.AssembleAndBuildElf(out, ast)
 	if err != nil {
 		fmt.Println(err)
 		return

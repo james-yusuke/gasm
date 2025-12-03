@@ -1,9 +1,10 @@
-package x86_64
+package builder
 
 import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"gasm/internal/ast/x86_64"
 	"gasm/internal/elf"
 	"os"
 	"strings"
@@ -18,7 +19,7 @@ type Reloc struct {
 	Kind    string
 }
 
-func AssembleAndBuildElf(path string, f *File) error {
+func AssembleAndBuildElf(path string, f *x86_64.File) error {
 	const baseVaddr = uint64(0x400000)
 	const pageSize = uint64(64 + 56)
 	textFileOff := pageSize
@@ -207,7 +208,7 @@ func AssembleAndBuildElf(path string, f *File) error {
 
 	for _, it := range f.Items {
 		switch n := it.(type) {
-		case *Label:
+		case *x86_64.Label:
 			if _, exists := syms[n.Name]; exists {
 				return fmt.Errorf("duplicate label: %s", n.Name)
 			}
@@ -217,25 +218,25 @@ func AssembleAndBuildElf(path string, f *File) error {
 			} else {
 				syms[n.Name] = symRec{Section: ".data", Offset: uint64(dataBuf.Len())}
 			}
-		case *Directive:
+		case *x86_64.Directive:
 			switch n.Args[0] {
 			case ".data":
 				currentSection = ".data"
 			case ".text":
 				currentSection = ".text"
 			}
-		case *DataDecl:
+		case *x86_64.DataDecl:
 			currentSection = ".data"
 			for _, item := range n.Items {
 				if item.IsStr {
 					writeData([]byte(item.Str))
 				} else {
 					switch v := item.Expr.(type) {
-					case NumberExpr:
+					case x86_64.NumberExpr:
 						var tmp [8]byte
 						binary.LittleEndian.PutUint64(tmp[:], uint64(v.Val))
 						writeData(tmp[:])
-					case IdentExpr:
+					case x86_64.IdentExpr:
 						relocs = append(relocs, Reloc{Section: ".data", Offset: uint64(dataBuf.Len()), Size: 8, Name: v.Name, Kind: "abs64"})
 						writeData(make([]byte, 8))
 					default:
@@ -243,7 +244,7 @@ func AssembleAndBuildElf(path string, f *File) error {
 					}
 				}
 			}
-		case *Instruction:
+		case *x86_64.Instruction:
 			fmt.Println("n.Mnemonic", n.Mnemonic, currentSection)
 			mn := strings.ToLower(n.Mnemonic)
 
@@ -252,12 +253,12 @@ func AssembleAndBuildElf(path string, f *File) error {
 					return fmt.Errorf("%s needs at least a label and a string", mn)
 				}
 
-				lblOp, ok := n.Operands[0].(LabelOperand)
+				lblOp, ok := n.Operands[0].(x86_64.LabelOperand)
 				if !ok {
 					return fmt.Errorf("%s first operand must be a label: %T", mn, n.Operands[0])
 				}
 
-				strOp, ok := n.Operands[1].(StrOperand)
+				strOp, ok := n.Operands[1].(x86_64.StrOperand)
 				if !ok {
 					return fmt.Errorf("%s second operand must be a string: %T", mn, n.Operands[1])
 				}
@@ -273,8 +274,8 @@ func AssembleAndBuildElf(path string, f *File) error {
 				}
 
 				if len(n.Operands) >= 3 {
-					if im, ok := n.Operands[2].(ImmOperand); ok {
-						if num, ok := im.Val.(NumberExpr); ok {
+					if im, ok := n.Operands[2].(x86_64.ImmOperand); ok {
+						if num, ok := im.Val.(x86_64.NumberExpr); ok {
 							desired := int(num.Val)
 							written := int(dataBuf.Len()) - int(syms[lblOp.Name].Offset)
 							if desired > written {
@@ -296,20 +297,20 @@ func AssembleAndBuildElf(path string, f *File) error {
 
 					src := n.Operands[1]
 					dst := n.Operands[0]
-					if rd, ok := dst.(RegOperand); ok {
+					if rd, ok := dst.(x86_64.RegOperand); ok {
 						regID, ok := regNameToID(rd.Name)
 						if !ok {
 							return fmt.Errorf("unknown reg: %s", rd.Name)
 						}
 						switch v := src.(type) {
-						case ImmOperand:
-							if num, ok := v.Val.(NumberExpr); ok {
+						case x86_64.ImmOperand:
+							if num, ok := v.Val.(x86_64.NumberExpr); ok {
 								if num.Val >= -(1<<31) && num.Val < (1<<32) {
 									encodeMovRegImm32(regID, uint32(num.Val))
 								} else {
 									encodeMovRegImm64(regID, uint64(num.Val))
 								}
-							} else if ident, ok := v.Val.(IdentExpr); ok {
+							} else if ident, ok := v.Val.(x86_64.IdentExpr); ok {
 								relocs = append(relocs, Reloc{Section: ".text", Offset: uint64(codeBuf.Len()) + 2, Size: 8, Name: ident.Name, Kind: "abs64"})
 								writeRexIfNeeded(regID)
 								codeBuf.WriteByte(0xB8 | byte(regID&7))
@@ -325,7 +326,7 @@ func AssembleAndBuildElf(path string, f *File) error {
 									return fmt.Errorf("unsupported mov immediate expression: %T", v.Val)
 								}
 							}
-						case LabelOperand:
+						case x86_64.LabelOperand:
 							relocs = append(relocs, Reloc{Section: ".text", Offset: uint64(codeBuf.Len()) + 2, Size: 8, Name: v.Name, Kind: "abs64"})
 							writeRexIfNeeded(regID)
 							codeBuf.WriteByte(0xB8 | byte(regID&7))
@@ -341,8 +342,8 @@ func AssembleAndBuildElf(path string, f *File) error {
 						return fmt.Errorf("xor needs 2 operands")
 					}
 
-					if d, ok := n.Operands[0].(RegOperand); ok {
-						if s, ok := n.Operands[1].(RegOperand); ok {
+					if d, ok := n.Operands[0].(x86_64.RegOperand); ok {
+						if s, ok := n.Operands[1].(x86_64.RegOperand); ok {
 							did, _ := regNameToID(d.Name)
 							sid, _ := regNameToID(s.Name)
 							encodeXorRegReg(did, sid)
@@ -363,7 +364,7 @@ func AssembleAndBuildElf(path string, f *File) error {
 					dstOp := n.Operands[0]
 					srcOp := n.Operands[1]
 
-					rd, ok := dstOp.(RegOperand)
+					rd, ok := dstOp.(x86_64.RegOperand)
 					if !ok {
 						return fmt.Errorf("%s dst must be register: %T", mn, dstOp)
 					}
@@ -373,7 +374,7 @@ func AssembleAndBuildElf(path string, f *File) error {
 					}
 
 					switch s := srcOp.(type) {
-					case RegOperand:
+					case x86_64.RegOperand:
 						srcID, ok := regNameToID(s.Name)
 						if !ok {
 							return fmt.Errorf("unknown reg: %s", s.Name)
@@ -383,8 +384,8 @@ func AssembleAndBuildElf(path string, f *File) error {
 						} else {
 							encodeSubRegReg(dstID, srcID)
 						}
-					case ImmOperand:
-						if num, ok := s.Val.(NumberExpr); ok {
+					case x86_64.ImmOperand:
+						if num, ok := s.Val.(x86_64.NumberExpr); ok {
 							if num.Val >= -128 && num.Val <= 127 {
 								if mn == "add" {
 									encodeAddRegImm8(dstID, int8(num.Val))
@@ -398,7 +399,7 @@ func AssembleAndBuildElf(path string, f *File) error {
 									encodeSubRegImm32(dstID, uint32(num.Val))
 								}
 							}
-						} else if ident, ok := s.Val.(IdentExpr); ok {
+						} else if ident, ok := s.Val.(x86_64.IdentExpr); ok {
 
 							relocs = append(relocs, Reloc{Section: ".text", Offset: uint64(codeBuf.Len()) + 2, Size: 4, Name: ident.Name, Kind: "abs32"})
 							if mn == "add" {
@@ -431,8 +432,7 @@ func AssembleAndBuildElf(path string, f *File) error {
 								return fmt.Errorf("%s unsupported immediate operand: %T", mn, s.Val)
 							}
 						}
-					case LabelOperand:
-
+					case x86_64.LabelOperand:
 						relocs = append(relocs, Reloc{Section: ".text", Offset: uint64(codeBuf.Len()) + 2, Size: 4, Name: s.Name, Kind: "abs32"})
 						if mn == "add" {
 							writeRex(0, dstID, true)
@@ -453,7 +453,7 @@ func AssembleAndBuildElf(path string, f *File) error {
 					if len(n.Operands) != 1 {
 						return fmt.Errorf("dec needs 1 operand")
 					}
-					if rd, ok := n.Operands[0].(RegOperand); ok {
+					if rd, ok := n.Operands[0].(x86_64.RegOperand); ok {
 						id, ok := regNameToID(rd.Name)
 						if !ok {
 							return fmt.Errorf("unknown reg: %s", rd.Name)
@@ -467,7 +467,7 @@ func AssembleAndBuildElf(path string, f *File) error {
 					if len(n.Operands) != 1 {
 						return fmt.Errorf("jmp needs 1 operand")
 					}
-					labelOp, ok := n.Operands[0].(LabelOperand)
+					labelOp, ok := n.Operands[0].(x86_64.LabelOperand)
 					if !ok {
 						return fmt.Errorf("jmp operand must be label: %T", n.Operands[0])
 					}
@@ -488,7 +488,7 @@ func AssembleAndBuildElf(path string, f *File) error {
 					if len(n.Operands) != 1 {
 						return fmt.Errorf("%s needs 1 operand", n.Mnemonic)
 					}
-					labelOp, ok := n.Operands[0].(LabelOperand)
+					labelOp, ok := n.Operands[0].(x86_64.LabelOperand)
 					if !ok {
 						return fmt.Errorf("%s operand must be label: %T", n.Mnemonic, n.Operands[0])
 					}
@@ -508,7 +508,7 @@ func AssembleAndBuildElf(path string, f *File) error {
 					if len(n.Operands) != 1 {
 						return fmt.Errorf("%s needs 1 operand", n.Mnemonic)
 					}
-					labelOp, ok := n.Operands[0].(LabelOperand)
+					labelOp, ok := n.Operands[0].(x86_64.LabelOperand)
 					if !ok {
 						return fmt.Errorf("%s operand must be label: %T", n.Mnemonic, n.Operands[0])
 					}
@@ -529,7 +529,7 @@ func AssembleAndBuildElf(path string, f *File) error {
 					if len(n.Operands) != 1 {
 						return fmt.Errorf("jg needs 1 operand")
 					}
-					labelOp, ok := n.Operands[0].(LabelOperand)
+					labelOp, ok := n.Operands[0].(x86_64.LabelOperand)
 					if !ok {
 						return fmt.Errorf("jg operand must be label: %T", n.Operands[0])
 					}
@@ -548,7 +548,7 @@ func AssembleAndBuildElf(path string, f *File) error {
 					if len(n.Operands) != 1 {
 						return fmt.Errorf("jl needs 1 operand")
 					}
-					labelOp, ok := n.Operands[0].(LabelOperand)
+					labelOp, ok := n.Operands[0].(x86_64.LabelOperand)
 					if !ok {
 						return fmt.Errorf("jl operand must be label: %T", n.Operands[0])
 					}
@@ -568,7 +568,7 @@ func AssembleAndBuildElf(path string, f *File) error {
 					if len(n.Operands) != 1 {
 						return fmt.Errorf("jge needs 1 operand")
 					}
-					labelOp, ok := n.Operands[0].(LabelOperand)
+					labelOp, ok := n.Operands[0].(x86_64.LabelOperand)
 					if !ok {
 						return fmt.Errorf("jge operand must be label: %T", n.Operands[0])
 					}
@@ -588,7 +588,7 @@ func AssembleAndBuildElf(path string, f *File) error {
 					if len(n.Operands) != 1 {
 						return fmt.Errorf("jle needs 1 operand")
 					}
-					labelOp, ok := n.Operands[0].(LabelOperand)
+					labelOp, ok := n.Operands[0].(x86_64.LabelOperand)
 					if !ok {
 						return fmt.Errorf("jle operand must be label: %T", n.Operands[0])
 					}
@@ -687,9 +687,9 @@ func AssembleAndBuildElf(path string, f *File) error {
 
 func evalToInt64(x interface{}) (int64, error) {
 	switch v := x.(type) {
-	case NumberExpr:
+	case x86_64.NumberExpr:
 		return v.Val, nil
-	case UnaryExpr:
+	case x86_64.UnaryExpr:
 		n, err := evalToInt64(v.X)
 		if err != nil {
 			return 0, err
@@ -698,7 +698,7 @@ func evalToInt64(x interface{}) (int64, error) {
 			return -n, nil
 		}
 		return 0, fmt.Errorf("unsupported unary op: %s", v.Op)
-	case BinaryExpr:
+	case x86_64.BinaryExpr:
 		L, err := evalToInt64(v.Left)
 		if err != nil {
 			return 0, err
