@@ -1,4 +1,4 @@
-package x86_64
+package lexer
 
 import (
 	"bufio"
@@ -76,7 +76,7 @@ type Lexer struct {
 	havePeek bool
 }
 
-func NewLexer(r io.Reader) *Lexer {
+func New(r io.Reader) *Lexer {
 	return &Lexer{r: bufio.NewReader(r), line: 1, col: 0}
 }
 
@@ -139,7 +139,6 @@ func (lx *Lexer) NextToken() Token {
 		}
 
 		if r == ';' {
-
 			var sb strings.Builder
 			for {
 				r2, err := lx.read()
@@ -176,7 +175,6 @@ func (lx *Lexer) NextToken() Token {
 		}
 
 		if unicode.IsLetter(r) || r == '_' || r == '.' || r == '@' {
-
 			var sb strings.Builder
 			sb.WriteRune(r)
 			for {
@@ -237,7 +235,6 @@ func (lx *Lexer) NextToken() Token {
 		case '#':
 			return Token{Kind: TOK_HASH, Lit: "#", Line: lx.line, Col: lx.col}
 		default:
-
 			return Token{Kind: TOK_OTHER, Lit: string(r), Line: lx.line, Col: lx.col}
 		}
 	}
