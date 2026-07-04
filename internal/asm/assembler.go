@@ -120,9 +120,13 @@ func (a *Assembler) Assemble(f *ast.File) (*AssemblyResult, error) {
 					if lbl, ok := op.(ast.LabelOperand); ok {
 						mn := strings.ToLower(n.Mnemonic)
 						if mn == "jmp" || strings.HasPrefix(mn, "j") || mn == "call" {
+							relocOffset := codeBuf.Len() + 1
+							if strings.HasPrefix(mn, "j") && mn != "jmp" {
+								relocOffset = codeBuf.Len() + 2
+							}
 							relocs = append(relocs, format.Reloc{
 								Section: ".text",
-								Offset:  uint64(codeBuf.Len() + 1),
+								Offset:  uint64(relocOffset),
 								Size:    4,
 								Name:    lbl.Name,
 								Kind:    int(arch.RelocRel32),

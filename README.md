@@ -1,42 +1,94 @@
 # gasm
 
-**gasm** is a modular, nasm-style assembler written entirely in Go. Designed for extensibility and readability, it features a pure handwritten Lexer, Parser, and AST system (no regular expressions) and a comprehensive debug output for AST inspection.
+gasm is a small NASM-style assembler written in Go for learning how assemblers work.
 
-## Features
-- **NASM-inspired syntax:** Focused initially on x86_64, easily extendable to arm64/others.
-- **Pure-Go Implementation:** No external assembler tools or regex engines; all components are handcrafted for clarity and extensibility.
-- **Modular Architecture:** Each architecture (x86_64, arm64, etc.) has its own independent Lexer/Parser/Codegen modules.
-- **Powerful AST Debugging:** Includes helpers for visualizing the full parsed structure of your assembly input.
-- **Ready for future enhancements:** The codebase is organized for easy addition of more instruction sets, pseudo-ops, macros, and more.
+This project is intentionally educational. It is useful for reading, experimenting, and extending lexer/parser/AST/encoder code, but it is not a production assembler and should not be used to build trusted release binaries.
+
+## What You Can Learn
+
+- How assembly text is tokenized by a handwritten lexer.
+- How a parser turns instructions, labels, directives, and data declarations into an AST.
+- How a simple x86_64 encoder maps a subset of instructions to machine code.
+- How labels and relocations are collected before building an ELF or PE-style output.
+- How a small compiler-like tool can be split into clear internal packages.
+
+## Current Features
+
+- NASM-inspired syntax for a learning-sized x86_64 subset.
+- Pure Go implementation with no external assembler dependency.
+- Parser support for labels, directives, data declarations, strings, numeric expressions, registers, immediates, and simple memory operands.
+- Basic binary output through the internal format builders.
+- Examples that are assembled in CI to keep sample code from drifting.
+
+## Supported Assembly Subset
+
+The x86_64 encoder currently supports:
+
+- Data movement: `mov`, `lea`
+- Arithmetic and bit operations: `add`, `sub`, `and`, `or`, `xor`, `inc`, `dec`, `neg`, `not`
+- Multiplication and division forms: `mul`, `imul`, `div`, `idiv`
+- Comparisons and tests: `cmp`, `test`
+- Branching: `jmp`, `je`/`jz`, `jne`/`jnz`, `jg`, `jl`, `jge`, `jle`, `ja`, `jb`, `call`, `ret`
+- Stack and system instructions: `push`, `pop`, `syscall`, `int`, `nop`
+
+Memory addressing is deliberately simple. Examples such as `[rbp-8]`, `[rax]`, and numeric displacements are good learning targets; complex addressing modes are still future work.
 
 ## Project Layout
+
+```text
+cmd/gasm/                 CLI entry point
+examples/                 Small assembly programs used as smoke tests
+internal/ast/             AST node definitions
+internal/lexer/           Handwritten lexer
+internal/parser/          Parser and expression handling
+internal/arch/            Architecture abstractions
+internal/arch/x86_64/     x86_64 instruction encoder
+internal/asm/             Assembly pipeline and relocation handling
+internal/format/          Output format builders
+.github/workflows/        Pull request and push checks
 ```
-gasm/
-├── arch/
-│   ├── x86_64/   # Handwritten lexer/parser/ast/debug for x86_64 assembly
-│   └── ...       # Future architectures (e.g., arm64)
-├── examples/     # Sample asm files
-gasm/main.go      # Command-line driver for parsing/testing AST
+
+## Usage
+
+Build the CLI:
+
+```sh
+go build ./cmd/gasm
 ```
 
-## Usage (Current prototype)
-1. Place your nasm-style .asm file in `examples/` (see `examples/test.asm` for syntax examples)
-2. Run the main program:
-   ```sh
-   go run main.go
-   ```
-   This will lex, parse, and print the AST for your input.
+Assemble an example:
 
-## Design Notes
-- The entire toolchain is Go-native. All parsing logic is done manually (no regex!), simulating a C-style lexer/parser machinery for maximal flexibility and explicitness.
-- The structure is designed for maintainability: Adding new instructions, features, or architectures is straightforward.
-- Parser and AST construction will become even more robust in future updates, including perfect newline and syntax fidelity and error reporting.
+```sh
+go run ./cmd/gasm examples/test.asm hello
+```
 
-## Roadmap / Future Work
-- Improved parsing for all nuanced NASM syntax and newlines.
-- Bincode/codegen phase for outputting actual machine code.
-- Expanding support for additional instruction sets, pseudo-ops, and macro-processing.
-- Multiple arch support (arm64, riscv, etc.) and platform-specific features.
+Run the checks used by CI:
 
----
-**gasm** aims to be a practical, hackable, and extensible assembler frontend, providing clarity for language tools enthusiasts and system programmers.
+```sh
+gofmt -w .
+go test ./...
+go vet ./...
+```
+
+## Examples
+
+- `examples/test.asm`: minimal Linux `write` + `exit` syscall flow.
+- `examples/jne.asm`: loop with `dec` and `jne`.
+- `examples/arithmetic.asm`: arithmetic, bit operations, `imul`, `test`, and conditional branching.
+- `examples/memory.asm`: simple stack-like memory addressing and `lea`.
+- `examples/call.asm`: `call` and `ret`.
+
+## Contributing
+
+Small, focused pull requests are easiest to review. Good learning-sized improvements include:
+
+- Adding one instruction form with tests.
+- Expanding parser support for one syntax feature.
+- Adding an example that demonstrates a real assembler concept.
+- Improving error messages for malformed assembly.
+
+Pull requests run GitHub Actions checks for formatting, tests, vet, and CLI build health.
+
+## Safety Note
+
+Assembly input and generated binaries should be treated as unsafe unless you understand and reviewed them. See [SECURITY.md](SECURITY.md) for reporting guidance.

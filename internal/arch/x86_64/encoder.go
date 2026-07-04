@@ -48,10 +48,26 @@ func (e *Encoder) EncodeInstruction(ins *ast.Instruction) ([]byte, error) {
 		return e.encodeAdd(&buf, ins)
 	case "sub":
 		return e.encodeSub(&buf, ins)
+	case "and":
+		return e.encodeAnd(&buf, ins)
+	case "or":
+		return e.encodeOr(&buf, ins)
 	case "inc":
 		return e.encodeInc(&buf, ins)
 	case "dec":
 		return e.encodeDec(&buf, ins)
+	case "mul":
+		return e.encodeUnaryGroup3(&buf, ins, 4)
+	case "imul":
+		return e.encodeImul(&buf, ins)
+	case "div":
+		return e.encodeUnaryGroup3(&buf, ins, 6)
+	case "idiv":
+		return e.encodeUnaryGroup3(&buf, ins, 7)
+	case "neg":
+		return e.encodeUnaryGroup3(&buf, ins, 3)
+	case "not":
+		return e.encodeUnaryGroup3(&buf, ins, 2)
 	case "cmp":
 		return e.encodeCmp(&buf, ins)
 	case "jmp":
@@ -170,21 +186,38 @@ func (e *Encoder) encodeMovRegReg(buf *bytes.Buffer, dstID, srcID int, dstName, 
 }
 
 func (e *Encoder) encodeMovRegMem(buf *bytes.Buffer, regID int, mem ast.MemOperand, regName string) ([]byte, error) {
-	e.writeRex(buf, regID, 0, true, regName)
+	e.writeRex(buf, regID, memBaseID(e, mem), true, regName)
 	buf.WriteByte(0x8B)
-	e.writeModRM(buf, regID, 0, 0x00)
+	if err := e.writeMemModRM(buf, regID, mem); err != nil {
+		return nil, err
+	}
 	return buf.Bytes(), nil
 }
 
 func (e *Encoder) encodeMovMemReg(buf *bytes.Buffer, mem ast.MemOperand, regID int, regName string) ([]byte, error) {
-	e.writeRex(buf, regID, 0, true, regName)
+	e.writeRex(buf, regID, memBaseID(e, mem), true, regName)
 	buf.WriteByte(0x89)
-	e.writeModRM(buf, regID, 0, 0x00)
+	if err := e.writeMemModRM(buf, regID, mem); err != nil {
+		return nil, err
+	}
 	return buf.Bytes(), nil
 }
 
 func (e *Encoder) encodeMovMemImm(buf *bytes.Buffer, mem ast.MemOperand, val ast.Expr) ([]byte, error) {
-	return nil, fmt.Errorf("mov mem, imm not yet implemented")
+	num, ok := evalNumber(val)
+	if !ok {
+		return nil, fmt.Errorf("mov mem, imm requires NumberExpr for now")
+	}
+
+	e.writeRex(buf, 0, memBaseID(e, mem), true, "")
+	buf.WriteByte(0xC7)
+	if err := e.writeMemModRM(buf, 0, mem); err != nil {
+		return nil, err
+	}
+	var tmp [4]byte
+	binary.LittleEndian.PutUint32(tmp[:], uint32(num))
+	buf.Write(tmp[:])
+	return buf.Bytes(), nil
 }
 
 func (e *Encoder) encodeXor(buf *bytes.Buffer, ins *ast.Instruction) ([]byte, error) {
@@ -222,6 +255,14 @@ func (e *Encoder) encodeAdd(buf *bytes.Buffer, ins *ast.Instruction) ([]byte, er
 
 func (e *Encoder) encodeSub(buf *bytes.Buffer, ins *ast.Instruction) ([]byte, error) {
 	return e.encodeArithRR(buf, ins, 0x2B, 0x29, 0x81, 0x83, 5)
+}
+
+func (e *Encoder) encodeAnd(buf *bytes.Buffer, ins *ast.Instruction) ([]byte, error) {
+	return e.encodeArithRR(buf, ins, 0x23, 0x21, 0x81, 0x83, 4)
+}
+
+func (e *Encoder) encodeOr(buf *bytes.Buffer, ins *ast.Instruction) ([]byte, error) {
+	return e.encodeArithRR(buf, ins, 0x0B, 0x09, 0x81, 0x83, 1)
 }
 
 func (e *Encoder) encodeCmp(buf *bytes.Buffer, ins *ast.Instruction) ([]byte, error) {
@@ -407,11 +448,120 @@ func (e *Encoder) encodeInt(buf *bytes.Buffer, ins *ast.Instruction) ([]byte, er
 }
 
 func (e *Encoder) encodeLea(buf *bytes.Buffer, ins *ast.Instruction) ([]byte, error) {
-	return nil, fmt.Errorf("lea not yet implemented")
+	if len(ins.Operands) != 2 {
+		return nil, fmt.Errorf("lea requires 2 operands")
+	}
+	dst, ok := ins.Operands[0].(ast.RegOperand)
+	if !ok {
+		return nil, fmt.Errorf("lea dst must be register")
+	}
+	mem, ok := ins.Operands[1].(ast.MemOperand)
+	if !ok {
+		return nil, fmt.Errorf("lea src must be memory")
+	}
+
+	dstID, ok := e.Registers()[strings.ToLower(dst.Name)]
+	if !ok {
+		return nil, fmt.Errorf("unknown register: %s", dst.Name)
+	}
+
+	e.writeRex(buf, dstID, memBaseID(e, mem), true, dst.Name)
+	buf.WriteByte(0x8D)
+	if err := e.writeMemModRM(buf, dstID, mem); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func (e *Encoder) encodeTest(buf *bytes.Buffer, ins *ast.Instruction) ([]byte, error) {
-	return nil, fmt.Errorf("test not yet implemented")
+	if len(ins.Operands) != 2 {
+		return nil, fmt.Errorf("test requires 2 operands")
+	}
+
+	dst, ok := ins.Operands[0].(ast.RegOperand)
+	if !ok {
+		return nil, fmt.Errorf("test dst must be register")
+	}
+	dstID, ok := e.Registers()[strings.ToLower(dst.Name)]
+	if !ok {
+		return nil, fmt.Errorf("unknown register: %s", dst.Name)
+	}
+
+	switch src := ins.Operands[1].(type) {
+	case ast.RegOperand:
+		srcID, ok := e.Registers()[strings.ToLower(src.Name)]
+		if !ok {
+			return nil, fmt.Errorf("unknown register: %s", src.Name)
+		}
+		e.writeRex(buf, srcID, dstID, true, dst.Name)
+		buf.WriteByte(0x85)
+		e.writeModRM(buf, srcID, dstID, 0xC0)
+	case ast.ImmOperand:
+		num, ok := evalNumber(src.Val)
+		if !ok {
+			return nil, fmt.Errorf("test immediate requires NumberExpr")
+		}
+		e.writeRex(buf, 0, dstID, true, dst.Name)
+		buf.WriteByte(0xF7)
+		e.writeModRM(buf, 0, dstID, 0xC0)
+		var tmp [4]byte
+		binary.LittleEndian.PutUint32(tmp[:], uint32(num))
+		buf.Write(tmp[:])
+	default:
+		return nil, fmt.Errorf("test unsupported src operand: %T", src)
+	}
+
+	return buf.Bytes(), nil
+}
+
+func (e *Encoder) encodeUnaryGroup3(buf *bytes.Buffer, ins *ast.Instruction, extField int) ([]byte, error) {
+	if len(ins.Operands) != 1 {
+		return nil, fmt.Errorf("%s requires 1 operand", ins.Mnemonic)
+	}
+	rd, ok := ins.Operands[0].(ast.RegOperand)
+	if !ok {
+		return nil, fmt.Errorf("%s operand must be register", ins.Mnemonic)
+	}
+	regID, ok := e.Registers()[strings.ToLower(rd.Name)]
+	if !ok {
+		return nil, fmt.Errorf("unknown register: %s", rd.Name)
+	}
+	e.writeRex(buf, extField, regID, true, rd.Name)
+	buf.WriteByte(0xF7)
+	e.writeModRM(buf, extField, regID, 0xC0)
+	return buf.Bytes(), nil
+}
+
+func (e *Encoder) encodeImul(buf *bytes.Buffer, ins *ast.Instruction) ([]byte, error) {
+	if len(ins.Operands) == 1 {
+		return e.encodeUnaryGroup3(buf, ins, 5)
+	}
+	if len(ins.Operands) != 2 {
+		return nil, fmt.Errorf("imul requires 1 or 2 operands")
+	}
+
+	dst, ok := ins.Operands[0].(ast.RegOperand)
+	if !ok {
+		return nil, fmt.Errorf("imul dst must be register")
+	}
+	src, ok := ins.Operands[1].(ast.RegOperand)
+	if !ok {
+		return nil, fmt.Errorf("imul src must be register")
+	}
+
+	dstID, ok := e.Registers()[strings.ToLower(dst.Name)]
+	if !ok {
+		return nil, fmt.Errorf("unknown register: %s", dst.Name)
+	}
+	srcID, ok := e.Registers()[strings.ToLower(src.Name)]
+	if !ok {
+		return nil, fmt.Errorf("unknown register: %s", src.Name)
+	}
+
+	e.writeRex(buf, dstID, srcID, true, dst.Name)
+	buf.Write([]byte{0x0F, 0xAF})
+	e.writeModRM(buf, dstID, srcID, 0xC0)
+	return buf.Bytes(), nil
 }
 
 func (e *Encoder) writeRex(buf *bytes.Buffer, regField, rmField int, needW bool, regName string) {
@@ -446,4 +596,84 @@ func (e *Encoder) writeRexIfNeeded(buf *bytes.Buffer, regs ...int) {
 func (e *Encoder) writeModRM(buf *bytes.Buffer, regField, rmField int, base byte) {
 	modrm := base | byte((regField&7)<<3) | byte(rmField&7)
 	buf.WriteByte(modrm)
+}
+
+func (e *Encoder) writeMemModRM(buf *bytes.Buffer, regField int, mem ast.MemOperand) error {
+	if mem.Base == "" {
+		if num, ok := evalNumber(mem.Disp); ok {
+			buf.WriteByte(byte(0x04 | ((regField & 7) << 3)))
+			buf.WriteByte(0x25)
+			var tmp [4]byte
+			binary.LittleEndian.PutUint32(tmp[:], uint32(num))
+			buf.Write(tmp[:])
+			return nil
+		}
+		return fmt.Errorf("memory operand requires a base register or numeric displacement")
+	}
+
+	baseID, ok := e.Registers()[strings.ToLower(mem.Base)]
+	if !ok {
+		return fmt.Errorf("unknown memory base register: %s", mem.Base)
+	}
+
+	disp, hasDisp := evalNumber(mem.Disp)
+	mod := byte(0x00)
+	if hasDisp {
+		if disp >= -128 && disp <= 127 {
+			mod = 0x40
+		} else {
+			mod = 0x80
+		}
+	} else if baseID&7 == 5 {
+		mod = 0x40
+		disp = 0
+		hasDisp = true
+	}
+
+	rm := byte(baseID & 7)
+	buf.WriteByte(mod | byte((regField&7)<<3) | rm)
+	if rm == 4 {
+		buf.WriteByte(0x24)
+	}
+	if hasDisp {
+		if mod == 0x40 {
+			buf.WriteByte(byte(disp))
+		} else {
+			var tmp [4]byte
+			binary.LittleEndian.PutUint32(tmp[:], uint32(disp))
+			buf.Write(tmp[:])
+		}
+	}
+	return nil
+}
+
+func memBaseID(e *Encoder, mem ast.MemOperand) int {
+	if mem.Base == "" {
+		return 0
+	}
+	if id, ok := e.Registers()[strings.ToLower(mem.Base)]; ok {
+		return id
+	}
+	return 0
+}
+
+func evalNumber(expr ast.Expr) (int64, bool) {
+	switch v := expr.(type) {
+	case nil:
+		return 0, false
+	case ast.NumberExpr:
+		return v.Val, true
+	case ast.UnaryExpr:
+		n, ok := evalNumber(v.X)
+		if !ok {
+			return 0, false
+		}
+		switch v.Op {
+		case "-":
+			return -n, true
+		case "+":
+			return n, true
+		}
+	}
+	return 0, false
 }

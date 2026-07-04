@@ -262,7 +262,8 @@ func (p *Parser) parseOperands() []ast.Operand {
 			inner := p.readUntilMatchingBracket()
 			exprp := New(strings.NewReader(inner))
 			ex := exprp.parseExpr()
-			mem := &ast.MemOperand{Disp: ex}
+			mem := ast.MemOperand{Disp: ex}
+			fillMemAddress(&mem, ex)
 			ops = append(ops, mem)
 			continue
 		}
@@ -278,6 +279,42 @@ func (p *Parser) parseOperands() []ast.Operand {
 
 	}
 	return ops
+}
+
+func fillMemAddress(mem *ast.MemOperand, expr ast.Expr) {
+	switch v := expr.(type) {
+	case ast.IdentExpr:
+		if isRegister(v.Name) {
+			mem.Base = v.Name
+			mem.Disp = nil
+		}
+	case ast.BinaryExpr:
+		if base, disp, ok := splitBaseDisp(v); ok {
+			mem.Base = base
+			mem.Disp = disp
+		}
+	}
+}
+
+func splitBaseDisp(expr ast.BinaryExpr) (string, ast.Expr, bool) {
+	if expr.Op != "+" && expr.Op != "-" {
+		return "", nil, false
+	}
+
+	if left, ok := expr.Left.(ast.IdentExpr); ok && isRegister(left.Name) {
+		if expr.Op == "-" {
+			return left.Name, ast.UnaryExpr{Op: "-", X: expr.Right}, true
+		}
+		return left.Name, expr.Right, true
+	}
+
+	if expr.Op == "+" {
+		if right, ok := expr.Right.(ast.IdentExpr); ok && isRegister(right.Name) {
+			return right.Name, expr.Left, true
+		}
+	}
+
+	return "", nil, false
 }
 
 func (p *Parser) readUntilMatchingBracket() string {
